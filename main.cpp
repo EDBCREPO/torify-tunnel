@@ -1,122 +1,126 @@
 #include <nodepp/nodepp.h>
+#include <nodepp/json.h>
 #include <nodepp/http.h>
+#include <torify/http.h>
+
+/*────────────────────────────────────────────────────────────────────────────*/
 
 using namespace nodepp;
 
-void resolve_socket_1( http_t& cli ) {
-    http_t dpx; auto uri = url::parse( cli.path );
-    dpx.set_timeout(0); cli.set_timeout(0);
-    dpx.socket( uri.hostname, uri.port ); 
+/*────────────────────────────────────────────────────────────────────────────*/
 
-    if( dpx.connect() < 0 ){
+void resolve_osocket_1( http_t& cli ) {
+
+    auto data = regex::split( cli.path, ":" );
+    auto skt  = torify::tcp::client();
+
+    skt.onOpen([=]( socket_t raw ){
+        cli.write_header( 200, header_t({  }) );
+        stream::duplex  ( raw, cli );
+    });
+
+    skt.onError([=]( except_t ){
         cli.write_header( 404, header_t({  }) );
-        cli.write("404 | Error while connecting the server");
-        return; 
-    }
+        cli.write( "couldn't connect to url" );
+    });
 
-    dpx.write_header( cli.method, uri.path, cli.get_version(), cli.headers );
-    stream::duplex( dpx, cli );
+    skt.connect( 
+        /*------------*/ data[0] ,
+        string::to_uint( data[1] )
+    );
+
 }
 
-void resolve_onion_1( http_t& cli ) {
-    http_t dpx; auto uri = url::parse( cli.path );
-    dpx.set_timeout(0); cli.set_timeout(0);
-    dpx.socket( "127.0.0.1", 9050 ); 
+void resolve_osocket_2( http_t& cli ) {
 
-    if( dpx.connect() < 0 ){
-        cli.write_header( 404, header_t({  }) );
-        cli.write("404 | Error while connecting the server");
-        return; 
-    }
+    torify_fetch_t args;
+    /*----------*/ args.url    = cli.path;
+    /*----------*/ args.method = cli.method;
+    /*----------*/ args.headers= cli.headers;
 
-    dpx.write( ptr_t<char>({ 0x05, 0x01, 0x00, 0x00 }) );
-    if( dpx.read(2)!=ptr_t<char>({ 0x05, 0x00, 0x00 }) ){ 
-        cli.write_header( 404, header_t({  }) );
-        cli.write("404 | Error while Handshaking Sock5");
-        return; 
-    }
-
-    auto dir = uri.path;
-    auto dip = uri.hostname; 
-    int  prt = (int) uri.port; 
-    int  len = (int) dip.size(); 
-
-    dpx.write( ptr_t<char>({ 0x05, 0x01, 0x00, 0x03, len, 0x00 }) );
-    dpx.write( dip ); dpx.write( ptr_t<char>({ 0x00, prt, 0x00 }) );
-    dpx.read();
-
-    dpx.write_header( cli.method, uri.path, cli.get_version(), cli.headers );
-    stream::duplex( dpx, cli );
-}
-
-void resolve_socket_2( array_t<string_t>& data, http_t& cli ) {
-
-    data[0] = dns::lookup( data[0] ); socket_t dpx;
-    dpx.socket( data[0], string::to_ulong( data[1] ) ); 
-    dpx.set_timeout(0); cli.set_timeout(0);
-
-    if( dpx.connect() < 0 ){
-        cli.write_header( 404, header_t({  }) );
-        cli.write("404 | Error while connecting the server");
-        return; 
-    }
-
-    cli.write_header( 200, header_t({  }) );
-    stream::duplex( cli, dpx );
+    torify::http::fetch( args )
     
+    .then([=]( http_t raw ){
+        cli.write_header( raw.status, raw.headers );
+        stream::duplex( raw, cli );
+    })
+
+    .fail([=]( except_t err ){
+        cli.write_header( 404, header_t({  }) );
+        cli.write( "couldn't connect to url" );
+    });
+
 }
 
-void resolve_onion_2( array_t<string_t>& data, http_t& cli ) {
+/*────────────────────────────────────────────────────────────────────────────*/
 
-    socket_t dpx; dpx.socket( "127.0.0.1", 9050 ); 
-    dpx.set_timeout(0); cli.set_timeout(0);
-
-    if( dpx.connect() < 0 ){
-        cli.write_header( 404, header_t({  }) );
-        cli.write("404 | Error while connecting the server");
-        return; 
-    }
-
-    dpx.write( ptr_t<char>({ 0x05, 0x01, 0x00, 0x00 }) );
-    if( dpx.read(2)!=ptr_t<char>({ 0x05, 0x00, 0x00 }) ){ 
-        cli.write_header( 404, header_t({  }) );
-        cli.write("404 | Error while Handshaking Sock5");
-        return; 
-    }
-
-    int  prt = 80;
-    auto dip = data[0]; 
-    int  len = (int) dip.size(); 
-
-    dpx.write( ptr_t<char>({ 0x05, 0x01, 0x00, 0x03, len, 0x00 }) );
-    dpx.write( dip ); dpx.write( ptr_t<char>({ 0x00, prt, 0x00 }) );
-    dpx.read();
-
-    cli.write_header( 200, header_t({  }) );
-    stream::duplex( cli, dpx );
+void resolve_nsocket_1( http_t& cli ) {
     
+    auto data = regex::split( cli.path, ":" );
+    auto skt  = tcp::client();
+
+    skt.onOpen([=]( socket_t raw ){
+        cli.write_header( 200, header_t({  }) );
+        stream::duplex( raw, cli );
+    });
+
+    skt.onError([=]( except_t ){
+        cli.write_header( 404, header_t({  }) );
+        cli.write( "couldn't connect to url" );
+    });
+
+    skt.connect( 
+        dns::lookup/**/( data[0] ),
+        string::to_uint( data[1] )
+    );
+
 }
+
+void resolve_nsocket_2( http_t& cli ) {
+
+    fetch_t args;
+    /*---*/ args.url    = cli.path;
+    /*---*/ args.method = cli.method;
+    /*---*/ args.headers= cli.headers;
+
+    http::fetch( args )
+    
+    .then([=]( http_t raw ){
+        cli.write_header( raw.status, raw.headers );
+        stream::duplex( raw, cli );
+    })
+
+    .fail([=]( except_t ){
+        cli.write_header( 404, header_t({  }) );
+        cli.write( "couldn't connect to url" );
+    });
+
+}
+
+/*────────────────────────────────────────────────────────────────────────────*/
 
 void onMain() {
 
     auto server = http::server([]( http_t cli ){
 
-        if( cli.method != "CONNECT" ){
-            auto uri = url::parse( cli.path );
+        if( cli.method == "CONNECT" ){
 
-            if( regex::test( cli.path, "\\.onion" ) ){
-                resolve_onion_1( cli );
-            } else {
-                resolve_socket_1( cli );
-            }   return;
+            if( regex::test( cli.path, "[.]onion" ) )
+                 { resolve_osocket_1( cli ); } 
+            else { resolve_nsocket_1( cli ); }
+            
+        } elif( url::is_valid( cli.path ) ) {
 
-        }
-        
-        auto data = regex::split( cli.path, ":" );
-        if( regex::test( data[0], "\\.onion" ) ){
-            resolve_onion_2( data, cli );
+            if( regex::test( cli.path, "[.]onion" ) )
+                 { resolve_osocket_2( cli ); } 
+            else { resolve_nsocket_2( cli ); }
+
         } else {
-            resolve_socket_2( data, cli );
+
+            console::log( cli.method, cli.path );
+            cli.write_header( 404, header_t({  }) );
+            cli.write( "invalid url" );
+
         }
 
     });
@@ -126,3 +130,5 @@ void onMain() {
     });
 
 }
+
+/*────────────────────────────────────────────────────────────────────────────*/
